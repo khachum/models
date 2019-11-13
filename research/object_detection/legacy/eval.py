@@ -77,6 +77,8 @@ flags.DEFINE_boolean(
     'run_once', False, 'Option to only run a single pass of '
     'evaluation. Overrides the `max_evals` parameter in the '
     'provided config.')
+flags.DEFINE_float('gpu_per_fraction', 1., "Gpu memory usage fraction")
+
 FLAGS = flags.FLAGS
 
 
@@ -127,7 +129,7 @@ def main(unused_argv):
   if 'graph_rewriter_config' in configs:
     graph_rewriter_fn = graph_rewriter_builder.build(
         configs['graph_rewriter_config'], is_training=False)
-
+  gpu_per_fraction = FLAGS.gpu_per_fraction
   evaluator.evaluate(
       create_input_dict_fn,
       model_fn,
@@ -135,7 +137,8 @@ def main(unused_argv):
       categories,
       FLAGS.checkpoint_dir,
       FLAGS.eval_dir,
-      graph_hook_fn=graph_rewriter_fn)
+      graph_hook_fn=graph_rewriter_fn,
+      gpu_per_fraction=gpu_per_fraction)
 
 
 if __name__ == '__main__':

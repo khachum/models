@@ -81,6 +81,8 @@ flags.DEFINE_string('input_config_path', '',
 flags.DEFINE_string('model_config_path', '',
                     'Path to a model_pb2.DetectionModel config file.')
 
+flags.DEFINE_float('gpu_per_fraction', 1., "Gpu memory usage fraction")
+
 FLAGS = flags.FLAGS
 
 
@@ -163,7 +165,9 @@ def main(_):
   if 'graph_rewriter_config' in configs:
     graph_rewriter_fn = graph_rewriter_builder.build(
         configs['graph_rewriter_config'], is_training=True)
-
+  gpu_per_fraction = FLAGS.gpu_per_fraction
+  if gpu_per_fraction > 1 or gpu_per_fraction < 0:
+      gpu_per_fraction = 1.
   trainer.train(
       create_input_dict_fn,
       model_fn,
@@ -177,7 +181,9 @@ def main(_):
       worker_job_name,
       is_chief,
       FLAGS.train_dir,
-      graph_hook_fn=graph_rewriter_fn)
+      graph_hook_fn=graph_rewriter_fn,
+      gpu_per_fraction=gpu_per_fraction
+  )
 
 
 if __name__ == '__main__':

@@ -13,17 +13,13 @@
 # limitations under the License.
 # ==============================================================================
 """Common utility functions for evaluation."""
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import collections
 import os
 import re
 import time
+import shutil
 
 import numpy as np
-from six.moves import range
 import tensorflow as tf
 
 from object_detection.core import box_list
@@ -245,7 +241,8 @@ def _run_checkpoint_once(tensor_dict,
                          save_graph_dir='',
                          losses_dict=None,
                          eval_export_path=None,
-                         process_metrics_fn=None):
+                         process_metrics_fn=None,
+                         gpu_per_fraction=1.):
   """Evaluates metrics defined in evaluators and returns summaries.
 
   This function loads the latest checkpoint in checkpoint_dirs and evaluates
@@ -305,7 +302,12 @@ def _run_checkpoint_once(tensor_dict,
   """
   if save_graph and not save_graph_dir:
     raise ValueError('`save_graph_dir` must be defined.')
-  sess = tf.Session(master, graph=tf.get_default_graph())
+  session_config = tf.ConfigProto(allow_soft_placement=True,
+                                  log_device_placement=False,
+                                  gpu_options=tf.GPUOptions(
+                                      per_process_gpu_memory_fraction=gpu_per_fraction))
+  session_config.gpu_options.allow_growth = True
+  sess = tf.Session(master, graph=tf.get_default_graph(), config=session_config)
   sess.run(tf.global_variables_initializer())
   sess.run(tf.local_variables_initializer())
   sess.run(tf.tables_initializer())
@@ -419,7 +421,8 @@ def repeated_checkpoint_run(tensor_dict,
                             save_graph_dir='',
                             losses_dict=None,
                             eval_export_path=None,
-                            process_metrics_fn=None):
+                            process_metrics_fn=None,
+                            gpu_per_fraction=1.):
   """Periodically evaluates desired tensors using checkpoint_dirs or restore_fn.
 
   This function repeatedly loads a checkpoint and evaluates a desired
@@ -490,6 +493,15 @@ def repeated_checkpoint_run(tensor_dict,
 
   last_evaluated_model_path = None
   number_of_evaluations = 0
+  if os.path.exists(os.path.join(summary_dir, "best_accuracy.txt")):
+    with open(os.path.join(summary_dir, "best_accuracy.txt"), "r") as f:
+      best_accuracy = float(f.readline().split("\n")[0])
+  else:
+    with open(os.path.join(summary_dir, "best_accuracy.txt"), "w") as f:
+      best_accuracy = 0.0
+      f.write(str(0.0))
+
+
   while True:
     start = time.time()
     tf.logging.info('Starting evaluation at ' + time.strftime(
@@ -516,7 +528,35 @@ def repeated_checkpoint_run(tensor_dict,
           save_graph_dir,
           losses_dict=losses_dict,
           eval_export_path=eval_export_path,
-          process_metrics_fn=process_metrics_fn)
+          process_metrics_fn=process_metrics_fn,
+          gpu_per_fraction=gpu_per_fraction)
+
+      current_accuracy = metrics['PascalBoxes_Precision/mAP@0.5IOU']
+      if current_accuracy >= best_accuracy:
+        best_accuracy = current_accuracy
+        if not os.path.exists(os.path.join(summary_dir, 'checkpoint')):
+          open(os.path.join(summary_dir, 'checkpoint'), 'a').close()
+        with open(os.path.join(summary_dir, "best_accuracy.txt"), "w") as f:
+          f.write(str(best_accuracy))
+        checkpoint_name = model_path.split('/')[-1]
+        with open(os.path.join(summary_dir, 'checkpoint'), "rw") as f:
+          lines = f.readlines()
+          if lines:
+            lines[0] = 'model_checkpoint_path: "' + checkpoint_name + '"\n'
+          else:
+            lines.append('model_checkpoint_path: "' + checkpoint_name + '"\n')
+          lines.append('all_model_checkpoint_paths: "' + checkpoint_name + '"\n')
+        with open(os.path.join(summary_dir, 'checkpoint'), "w") as f:
+          f.writelines(lines)
+
+        for file in os.listdir(checkpoint_dirs[0]):
+          if checkpoint_name in file:
+            shutil.copy(os.path.join(checkpoint_dirs[0], file), os.path.join(summary_dir, file))
+          if file == "graph.pbtxt":
+            shutil.copy(os.path.join(checkpoint_dirs[0], file), os.path.join(summary_dir, file))
+          if file == "pipeline.config":
+            shutil.copy(os.path.join(checkpoint_dirs[0], file), os.path.join(summary_dir, file))
+
       write_metrics(metrics, global_step, summary_dir)
       if (max_evaluation_global_step and
           global_step >= max_evaluation_global_step):
